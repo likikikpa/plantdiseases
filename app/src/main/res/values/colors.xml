@@ -1,0 +1,6 @@
+<resources>
+    <color name="dark_green_bg">#061A12</color>
+    <color name="dark_green_button">#0C5C3F</color>
+    <color name="dark_green_button_outer">#11875B</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

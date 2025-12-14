@@ -1,0 +1,8 @@
+<resources>
+    <string-array name="plant_types">
+        <item>Томат</item>
+        <item>Пшеница</item>
+        <item>Картофель</item>
+        <item>Яблоня</item>
+    </string-array>
+</resources>

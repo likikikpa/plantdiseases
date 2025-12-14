@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Plant Diseases</string>
+    <string name="hint_take_photo">Сфотографируйте растение</string>
+    <string name="menu">Меню</string>
+    <string name="help">Справка</string>
+    <string name="capture">Сделать фото</string>
+</resources>

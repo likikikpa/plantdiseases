@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Внешнее тёмно-зелёное кольцо -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/dark_green_button_outer" />
+            <size
+                android:width="80dp"
+                android:height="80dp" />
+        </shape>
+    </item>
+
+    <!-- Внутренний кружок ещё темнее -->
+    <item
+        android:width="64dp"
+        android:height="64dp"
+        android:gravity="center">
+        <shape android:shape="oval">
+            <solid android:color="@color/dark_green_button" />
+        </shape>
+    </item>
+</layer-list>
