@@ -1,8 +1,7 @@
-
 package com.example.myapplication;
 
 import android.Manifest;
-import android.content.ContentValues;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -10,12 +9,10 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.provider.MediaStore;
 import android.view.View;
 import android.widget.ImageButton;
+import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -29,56 +26,102 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
+import java.io.File;
 import java.nio.ByteBuffer;
-import java.text.SimpleDateFormat;
-import java.util.Locale;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
-
+    private void applySystemBarsInsets() {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        View root = findViewById(R.id.root);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return insets;
+        });
+        ViewCompat.requestApplyInsets(root);
+    }
     private static final int REQUEST_CODE_PERMISSIONS = 10;
-    private static final String[] REQUIRED_PERMISSIONS =
-            new String[]{Manifest.permission.CAMERA};
+    private static final String[] REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA};
 
     private PreviewView viewFinder;
     private ImageButton btnCapture;
+    private ImageButton btnGallery;
     private View cropFrame;
+    private ProgressBar progressAnalyze;
 
     private ImageCapture imageCapture;
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
+
+    private final ExecutorService cameraExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        applySystemBarsInsets();
 
         viewFinder = findViewById(R.id.viewFinder);
         btnCapture = findViewById(R.id.btnCapture);
+        btnGallery = findViewById(R.id.btnGallery);
         cropFrame = findViewById(R.id.cropFrame);
+        progressAnalyze = findViewById(R.id.progressAnalyze);
 
         if (allPermissionsGranted()) {
             startCamera();
         } else {
-            ActivityCompat.requestPermissions(
-                    this,
-                    REQUIRED_PERMISSIONS,
-                    REQUEST_CODE_PERMISSIONS
-            );
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
         }
 
         btnCapture.setOnClickListener(v -> takePhoto());
+        btnGallery.setOnClickListener(v -> startActivity(new Intent(this, HistoryActivity.class)));
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateGalleryThumb();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        cameraExecutor.shutdown();
+    }
+
+    private void setAnalyzing(boolean analyzing) {
+        runOnUiThread(() -> {
+            progressAnalyze.setVisibility(analyzing ? View.VISIBLE : View.GONE);
+            btnCapture.setEnabled(!analyzing);
+            btnGallery.setEnabled(!analyzing);
+        });
+    }
+
+    private void updateGalleryThumb() {
+        ScanItem latest = ScanStorage.getLatest(this);
+        if (latest == null) {
+            btnGallery.setImageResource(android.R.drawable.ic_menu_gallery);
+            return;
+        }
+        Bitmap thumb = ScanStorage.decodeSampled(latest.imagePath, 200, 200);
+        if (thumb != null) {
+            btnGallery.setImageBitmap(thumb);
+        }
     }
 
     private boolean allPermissionsGranted() {
         for (String permission : REQUIRED_PERMISSIONS) {
-            if (ContextCompat.checkSelfPermission(
-                    this, permission) != PackageManager.PERMISSION_GRANTED) {
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
                 return false;
             }
         }
@@ -103,18 +146,11 @@ public class MainActivity extends AppCompatActivity {
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
 
                 cameraProvider.unbindAll();
-                cameraProvider.bindToLifecycle(
-                        this,
-                        cameraSelector,
-                        preview,
-                        imageCapture
-                );
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture);
 
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
-                Toast.makeText(this,
-                        "Не удалось запустить камеру",
-                        Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Не удалось запустить камеру", Toast.LENGTH_SHORT).show();
             }
         }, ContextCompat.getMainExecutor(this));
     }
@@ -122,64 +158,95 @@ public class MainActivity extends AppCompatActivity {
     private void takePhoto() {
         if (imageCapture == null) return;
 
-        // рамка в координатах PreviewView
         Rect viewCropRect = getCropRectInPreview();
+        setAnalyzing(true);
 
-        imageCapture.takePicture(
-                ContextCompat.getMainExecutor(this),
-                new ImageCapture.OnImageCapturedCallback() {
-                    @Override
-                    public void onCaptureSuccess(@NonNull ImageProxy image) {
-                        Bitmap bitmap = imageProxyToBitmap(
-                                image,
-                                image.getImageInfo().getRotationDegrees()
-                        );
-                        image.close();
-
-                        if (bitmap == null) {
-                            Toast.makeText(MainActivity.this,
-                                    "Ошибка обработки изображения",
-                                    Toast.LENGTH_SHORT).show();
-                            return;
-                        }
-
-                        Rect bitmapCropRect = mapViewRectToBitmap(viewCropRect, bitmap);
-
-                        if (bitmapCropRect.width() <= 0
-                                || bitmapCropRect.height() <= 0) {
-                            Toast.makeText(MainActivity.this,
-                                    "Слишком маленькая область кропа",
-                                    Toast.LENGTH_SHORT).show();
-                            saveBitmapToGallery(bitmap); // хотя бы целое фото
-                            return;
-                        }
-
-                        Bitmap cropped = Bitmap.createBitmap(
-                                bitmap,
-                                bitmapCropRect.left,
-                                bitmapCropRect.top,
-                                bitmapCropRect.width(),
-                                bitmapCropRect.height()
-                        );
-
-                        saveBitmapToGallery(cropped);
-                        bitmap.recycle();
+        imageCapture.takePicture(cameraExecutor, new ImageCapture.OnImageCapturedCallback() {
+            @Override
+            public void onCaptureSuccess(@NonNull ImageProxy image) {
+                try {
+                    Bitmap bitmap = imageProxyToBitmap(image, image.getImageInfo().getRotationDegrees());
+                    if (bitmap == null) {
+                        showToast("Ошибка обработки изображения");
+                        return;
                     }
 
-                    @Override
-                    public void onError(@NonNull ImageCaptureException exception) {
-                        exception.printStackTrace();
-                        Toast.makeText(MainActivity.this,
-                                "Ошибка при съёмке",
-                                Toast.LENGTH_SHORT).show();
+                    Rect bitmapCropRect = mapViewRectToBitmap(viewCropRect, bitmap);
+
+                    if (bitmapCropRect.width() <= 0 || bitmapCropRect.height() <= 0) {
+                        showToast("Слишком маленькая область кропа");
+                        return;
                     }
+
+                    Bitmap cropped = Bitmap.createBitmap(
+                            bitmap,
+                            bitmapCropRect.left,
+                            bitmapCropRect.top,
+                            bitmapCropRect.width(),
+                            bitmapCropRect.height()
+                    );
+
+                    // сохраняем приватно (НЕ в галерею)
+                    // и этот же файл отправляем в OpenAI
+                    File file = ScanStorage.saveScanJpeg(MainActivity.this, cropped);
+
+                    // Анализ через OpenAI
+                    DiagnosisResult result;
+                    try {
+                        result = OpenAiPlantApi.analyzePlantImage(file);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        result = DiagnosisResult.fallback("Ошибка запроса к OpenAI: " + e.getMessage());
+                    }
+
+                    // Добавляем в историю (с результатом)
+                    ScanStorage.addScan(MainActivity.this, new ScanItem(
+                            file.getAbsolutePath(),
+                            result.disease,
+                            result.confidencePercent,
+                            result.recommendations,
+                            System.currentTimeMillis()
+                    ));
+
+                    DiagnosisResult finalResult = result;
+                    runOnUiThread(() -> {
+                        setAnalyzing(false);
+                        updateGalleryThumb();
+
+                        Intent intent = new Intent(MainActivity.this, ResultActivity.class);
+                        intent.putExtra(ResultActivity.EXTRA_IMAGE_PATH, file.getAbsolutePath());
+                        intent.putExtra(ResultActivity.EXTRA_DISEASE, finalResult.disease);
+                        intent.putExtra(ResultActivity.EXTRA_CONFIDENCE, finalResult.confidencePercent);
+                        intent.putExtra(ResultActivity.EXTRA_RECOMMENDATIONS, finalResult.recommendations);
+                        startActivity(intent);
+                    });
+
+                    bitmap.recycle();
+                    cropped.recycle();
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    showToast("Ошибка: " + e.getMessage());
+                    setAnalyzing(false);
+                } finally {
+                    image.close();
                 }
-        );
+            }
+
+            @Override
+            public void onError(@NonNull ImageCaptureException exception) {
+                exception.printStackTrace();
+                showToast("Ошибка при съёмке");
+                setAnalyzing(false);
+            }
+        });
     }
 
-    // --- работа с рамкой и координатами ---
+    private void showToast(String s) {
+        runOnUiThread(() -> Toast.makeText(MainActivity.this, s, Toast.LENGTH_SHORT).show());
+    }
 
-    // рамка в координатах PreviewView
+    // --- рамка в координатах PreviewView ---
     private Rect getCropRectInPreview() {
         int[] vfLoc = new int[2];
         int[] cfLoc = new int[2];
@@ -207,15 +274,10 @@ public class MainActivity extends AppCompatActivity {
         float scaleX = (float) bitmap.getWidth() / (float) previewWidth;
         float scaleY = (float) bitmap.getHeight() / (float) previewHeight;
 
-        int left = (int) (viewRect.left * scaleX);
-        int top = (int) (viewRect.top * scaleY);
-        int right = (int) (viewRect.right * scaleX);
-        int bottom = (int) (viewRect.bottom * scaleY);
-
-        left = clamp(left, 0, bitmap.getWidth());
-        right = clamp(right, 0, bitmap.getWidth());
-        top = clamp(top, 0, bitmap.getHeight());
-        bottom = clamp(bottom, 0, bitmap.getHeight());
+        int left = clamp((int) (viewRect.left * scaleX), 0, bitmap.getWidth());
+        int top = clamp((int) (viewRect.top * scaleY), 0, bitmap.getHeight());
+        int right = clamp((int) (viewRect.right * scaleX), 0, bitmap.getWidth());
+        int bottom = clamp((int) (viewRect.bottom * scaleY), 0, bitmap.getHeight());
 
         return new Rect(left, top, right, bottom);
     }
@@ -224,140 +286,84 @@ public class MainActivity extends AppCompatActivity {
         return Math.max(min, Math.min(max, val));
     }
 
-    // --- ImageProxy -> Bitmap с учётом JPEG и YUV ---
-
-
+    // --- ImageProxy -> Bitmap (JPEG + YUV) ---
     private Bitmap imageProxyToBitmap(ImageProxy image, int rotationDegrees) {
         Bitmap bitmap = null;
 
-        // JPEG
-        if (image.getFormat() == ImageFormat.JPEG
-                && image.getPlanes().length > 0) {
-
+        if (image.getFormat() == ImageFormat.JPEG && image.getPlanes().length > 0) {
             ByteBuffer buffer = image.getPlanes()[0].getBuffer();
             byte[] bytes = new byte[buffer.remaining()];
             buffer.get(bytes);
             bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-        }
-        // YUV_420_888
-        else if (image.getFormat() == ImageFormat.YUV_420_888
-                && image.getPlanes().length == 3) {
-
-            ImageProxy.PlaneProxy[] planes = image.getPlanes();
-            ByteBuffer yBuffer = planes[0].getBuffer();
-            ByteBuffer uBuffer = planes[1].getBuffer();
-            ByteBuffer vBuffer = planes[2].getBuffer();
-
-            int ySize = yBuffer.remaining();
-            int uSize = uBuffer.remaining();
-            int vSize = vBuffer.remaining();
-
-            byte[] nv21 = new byte[ySize + uSize + vSize];
-
-            yBuffer.get(nv21, 0, ySize);
-            vBuffer.get(nv21, ySize, vSize);
-            uBuffer.get(nv21, ySize + vSize, uSize);
-
-            YuvImage yuvImage = new YuvImage(
-                    nv21,
-                    ImageFormat.NV21,
-                    image.getWidth(),
-                    image.getHeight(),
-                    null
-            );
-
+        } else if (image.getFormat() == ImageFormat.YUV_420_888 && image.getPlanes().length == 3) {
+            byte[] nv21 = yuv420888ToNv21(image);
+            YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            yuvImage.compressToJpeg(
-                    new Rect(0, 0, image.getWidth(), image.getHeight()),
-                    100,
-                    out
-            );
+            yuvImage.compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 95, out);
             byte[] jpegBytes = out.toByteArray();
             bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.length);
         }
 
-        if (bitmap == null) {
-            return null;
-        }
+        if (bitmap == null) return null;
 
-        // поворот
         if (rotationDegrees != 0) {
             Matrix matrix = new Matrix();
             matrix.postRotate(rotationDegrees);
-            bitmap = Bitmap.createBitmap(
-                    bitmap,
-                    0,
-                    0,
-                    bitmap.getWidth(),
-                    bitmap.getHeight(),
-                    matrix,
-                    true
-            );
+            Bitmap rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            if (rotated != bitmap) bitmap.recycle();
+            bitmap = rotated;
         }
 
         return bitmap;
     }
 
-    // --- сохранение в галерею ---
+    private byte[] yuv420888ToNv21(ImageProxy image) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        ImageProxy.PlaneProxy[] planes = image.getPlanes();
 
-    private void saveBitmapToGallery(Bitmap bitmap) {
-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                .format(System.currentTimeMillis());
-        String fileName = "plant_" + timeStamp + ".jpg";
+        ByteBuffer yBuf = planes[0].getBuffer();
+        ByteBuffer uBuf = planes[1].getBuffer();
+        ByteBuffer vBuf = planes[2].getBuffer();
 
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
-        values.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PlantDiseases");
-        }
+        int yRowStride = planes[0].getRowStride();
+        int yPixelStride = planes[0].getPixelStride();
 
-        Uri uri = getContentResolver().insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                values
-        );
-        if (uri == null) {
-            Toast.makeText(this,
-                    "Ошибка сохранения",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
+        int uvRowStride = planes[1].getRowStride();
+        int uvPixelStride = planes[1].getPixelStride();
 
-        try {
-            OutputStream out = getContentResolver().openOutputStream(uri);
-            if (out != null) {
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out);
-                out.close();
-                Toast.makeText(this,
-                        "Фото сохранено",
-                        Toast.LENGTH_SHORT).show();
+        byte[] out = new byte[width * height * 3 / 2];
+        int pos = 0;
+
+        // Y
+        for (int row = 0; row < height; row++) {
+            int yRowStart = row * yRowStride;
+            for (int col = 0; col < width; col++) {
+                out[pos++] = yBuf.get(yRowStart + col * yPixelStride);
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-            Toast.makeText(this,
-                    "Ошибка сохранения",
-                    Toast.LENGTH_SHORT).show();
         }
+
+        // VU (NV21)
+        int uvHeight = height / 2;
+        int uvWidth = width / 2;
+        for (int row = 0; row < uvHeight; row++) {
+            int uvRowStart = row * uvRowStride;
+            for (int col = 0; col < uvWidth; col++) {
+                int offset = uvRowStart + col * uvPixelStride;
+                out[pos++] = vBuf.get(offset);
+                out[pos++] = uBuf.get(offset);
+            }
+        }
+        return out;
     }
 
-    // --- обработка разрешений ---
-
     @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            @NonNull String[] permissions,
-            @NonNull int[] grantResults) {
-
-
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
-            if (allPermissionsGranted()) {
-                startCamera();
-            } else {
-                Toast.makeText(this,
-                        "Разрешение на камеру не выдано",
-                        Toast.LENGTH_SHORT).show();
+            if (allPermissionsGranted()) startCamera();
+            else {
+                Toast.makeText(this, "Разрешение на камеру не выдано", Toast.LENGTH_SHORT).show();
                 finish();
             }
         }

@@ -4,4 +4,9 @@
     <string name="menu">Меню</string>
     <string name="help">Справка</string>
     <string name="capture">Сделать фото</string>
+    <string name="gallery">Галерея</string>
+    <string name="close">Закрыть</string>
+    <string name="back">Назад</string>
+    <string name="history">История</string>
+    <string name="history_empty">История пуста</string>
 </resources>
