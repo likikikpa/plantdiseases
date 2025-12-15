@@ -30,7 +30,7 @@ public final class OpenAiPlantApi {
             return new DiagnosisResult("Тестовый режим", 50, "Это заглушка. Включи ENABLE_OPENAI=true.");
         }
 
-        String apiKey = "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"; //вставить ключ
+        String apiKey = "sk-xxxx"; // вставляйте свой ключ
         if (apiKey == null || apiKey.trim().isEmpty()) {
             return DiagnosisResult.fallback("Не задан OPENAI_API_KEY (см. свой код).");
         }

@@ -33,11 +33,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-
-    // НЕ обязательно, но можно включить
-    // buildFeatures {
-    //     viewBinding = true
-    // }
 }
 
 dependencies {
